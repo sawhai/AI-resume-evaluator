@@ -1,0 +1,11 @@
+services:
+  - type: web
+    name: cv-scorer
+    env: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: streamlit run app3.py
+    plan: free
+    envVars:
+      - key: API_KEY
+        sync: false
+

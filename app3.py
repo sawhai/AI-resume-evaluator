@@ -1,44 +1,46 @@
+
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Created on Fri Oct  4 13:04:17 2024
+Created on Wed Jan 22 12:11:03 2025
 
 @author: ha
 """
-# app.py
-
+#%%
 import os
 import PyPDF2
 import pandas as pd
-import streamlit as st
-
-import sys
-import pysqlite3
-sys.modules['sqlite3'] = pysqlite3
-
-from crewai import Agent, Task, Crew
-from crewai_tools import (
-    FileReadTool,
-    ScrapeWebsiteTool,
-    MDXSearchTool,
-    SerperDevTool
-)
-
+from dotenv import load_dotenv
+#import streamlit as st
 import re
+from openai import OpenAI
+#import sys
+#import pysqlite3
+#sys.modules['sqlite3'] = pysqlite3
+import streamlit as st
+from crewai import Agent, Task, Crew
+from langchain_openai import ChatOpenAI
+
 import warnings
 warnings.filterwarnings('ignore')
 
-#from utils import get_openai_api_key, get_serper_api_key
-os.environ["OPENAI_MODEL_NAME"]="gpt-4o-mini"
-#openai_api_key = get_openai_api_key()
-#os.environ["OPENAI_MODEL_NAME"] = 'gpt-3.5-turbo'
-os.environ["OPENAI_API_KEY"] = st.secrets["OPENAI_API_KEY"]
-os.environ["SERPER_API_KEY"] = st.secrets["SERPER_API_KEY"]
+# Load environment variables
+load_dotenv()
 
-# Load API keys from environment variables
-api_key = os.getenv("OPENAI_API_KEY")
-serper_api_key = os.getenv("SERPER_API_KEY")
+# Get API key from environment
+api_key = os.getenv("API_KEY")
+os.environ["OPENAI_API_KEY"] = api_key  # Add this after getting api_key
 
+
+# Initialize OpenAI client
+client = OpenAI(api_key=api_key)
+
+#llm = LLM(model="openai/gpt-4o")
+llm = ChatOpenAI(model="gpt-4o-mini", api_key=api_key)
+
+#%%
+
+# Reading PDF function
 def read_pdf(file):
     pdf_reader = PyPDF2.PdfReader(file)
     text = ''
@@ -48,10 +50,9 @@ def read_pdf(file):
             text += page_text
     return text
 
-
-####################
+#%%
 def process_resume(resume_text, job_description_text):
-    # Define Agents
+    # Create the agents
     job_requirements_agent = Agent(
         role="Job Requirements Extractor",
         goal="Extract key skills, qualifications, and experiences required for the job.",
@@ -80,12 +81,33 @@ def process_resume(resume_text, job_description_text):
         verbose=False,
         allow_delegation=False,
         backstory=(
-            "As a Resume Scorer, you evaluate each candidate's fit for the job by comparing their analyzed resume "
-            "against the extracted job requirements. You should not delegate this task to anyone; you should do it yourself."
+        "As a Resume Scorer, you evaluate each candidate's fit by comparing their "
+        "analyzed resume against the extracted job requirements. Always begin your "
+        "response with 'The score is x out of 10', replacing 'x' with the actual " 
+        "score. Then provide a concise justification for the score - not too long "
+        "or too short."
         )
     )
 
-    # Define Tasks
+
+    # Create the new agents
+    name_extractor_agent = Agent(
+        role="Name Extractor",
+        goal="Extract the candidate's name from the provided resume text.",
+        verbose=False,
+        allow_delegation=False,
+        backstory=(
+        "As a Resume Scorer, you evaluate each candidate's fit by comparing their "
+        "analyzed resume against the extracted job requirements. Always begin your "
+        "response with 'The score is x out of 10', replacing 'x' with the actual "
+        "score. Then provide a justification for the score. Do not delegate this "
+        "task; do it yourself."
+        )
+    )
+
+
+    #############################
+    # Define tasks
     job_requirements_task = Task(
         description=(
             "Extract key skills, qualifications, and experiences from the provided ({job_description_text})."
@@ -115,50 +137,59 @@ def process_resume(resume_text, job_description_text):
             "Compare the candidate's analyzed profile from resume_analysis_task with the job requirements "
             "extracted from the job_requirements_task "
             "and score the resume on a scale of 1 to 10, with 1 being a very weak candidate and 10 being a perfect fit. Provide a justification for the score."
+            "if you found out that the candidate is overqualified, it should affect your evaluation negatively and lower the score."
         ),
         expected_output=(
-            "A score between 1 and 10 indicating the candidate's fit for the job, with 1 being very weak candidate and 10 being a perfect fit, along with a justification."
+        "The score is [1-10] out of 10. [Justification for the score.]"
         ),
         context=[job_requirements_task, resume_analysis_task],
         agent=resume_scorer_agent
     )
 
+    # Define the tasks
+    name_extraction_task = Task(
+        description=(
+            "Extract the candidate's name from the provided resume text ({resume_text})."
+        ),
+        expected_output=(
+            "The candidate's full name as it appears in the resume."
+        ),
+        agent=name_extractor_agent,
+        #async_execution=True,
+        inputs={'resume_text': resume_text}
+    )
     # Provide inputs
     crew_inputs = {'job_description_text': job_description_text, 'resume_text': resume_text}
 
     # Create the crew
     talent_development_crew = Crew(
-        agents=[job_requirements_agent, resume_analyzer_agent, resume_scorer_agent],
-        tasks=[job_requirements_task, resume_analysis_task, resume_scoring_task],
-        verbose=False
-    )
-
+    agents=[job_requirements_agent, resume_analyzer_agent, resume_scorer_agent,name_extractor_agent],
+    tasks=[job_requirements_task, resume_analysis_task, name_extraction_task, resume_scoring_task],
+    manager = llm, verbose = True)
+    #llm = llm, verbose=True)
     # Run the crew
     result = talent_development_crew.kickoff(inputs=crew_inputs)
+    # Extract score and justification using regex
 
-    # Retrieve the scoring output from result.raw
-    scoring_output = result.raw
+    regex = re.compile(r'The score is (\d+) out of 10\.\s*(.*)')
+    match = regex.search(str(result))  # Convert result to string
+    #match = regex.searchs(result.raw)
 
-    # Extract the score and justification
-    score_match = re.search(r'(\d+)\s*out of 10', scoring_output)
-    if score_match:
-        score = int(score_match.group(1))
+    if match:
+        score = int(match.group(1))
+        justification = match.group(2).strip()
     else:
         score = None
-
-    # Extract the justification
-    justification_start = scoring_output.lower().find('justification:')
-    if justification_start != -1:
-        justification = scoring_output[justification_start + len('justification:'):].strip()
-    else:
-        # If "justification:" not found, take the text after the score match
-        score_end = score_match.end() if score_match else 0
-        justification = scoring_output[score_end:].strip()
-
-    return score, justification
+        justification = None
 
 
-#################################
+    # Extract name from name_extraction_task output
+    #name = name_extraction_task.output.raw
+    name = str(name_extraction_task.output.raw)  # Convert output to string
+    return name, score, justification
+
+
+#%%
 
 def main():
     st.title("Resume Scoring Application")
@@ -183,27 +214,19 @@ def main():
             # Process each uploaded resume
             for uploaded_file in uploaded_files:
                 resume_text = read_pdf(uploaded_file)
-                # Extract candidate name (assumed to be the first line)
-                resume_lines = resume_text.strip().split('\n')
-                if resume_lines:
-                    candidate_name_line = resume_lines[0]
-                    candidate_name = candidate_name_line.strip()
-                else:
-                    candidate_name = "Unknown"
-
                 # Process the resume
                 with st.spinner(f"Processing {uploaded_file.name}..."):
-                    score, justification = process_resume(resume_text, job_description_text)
+                    name, score, justification = process_resume(resume_text, job_description_text)
 
                 # Display the result
-                st.subheader(f"Results for {candidate_name} ({uploaded_file.name})")
+                st.subheader(f"Results for ({uploaded_file.name})")
                 st.write(f"**Score:** {score} out of 10")
                 st.write(f"**Justification:** {justification}")
 
                 # Append to results
                 results.append({
                     'filename': uploaded_file.name,
-                    'applicant_name': candidate_name,
+                    'applicant_name': name,
                     'score': score,
                     'justification': justification
                 })
