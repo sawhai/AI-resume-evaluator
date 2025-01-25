@@ -1,8 +1,8 @@
 streamlit
-crewai
-openai
-pypdf2
-python-dotenv
 pandas
-langchain-openai
-docx
+PyPDF2
+python-docx
+python-dotenv
+openai
+langchain
+crewai
