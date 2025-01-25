@@ -6,3 +6,4 @@ python-dotenv
 openai
 langchain_openai
 crewai
+streamlit-authenticator==0.4.1
