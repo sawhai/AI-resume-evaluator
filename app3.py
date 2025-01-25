@@ -9,6 +9,7 @@ Created on Wed Jan 22 12:11:03 2025
 #%%
 import os
 import PyPDF2
+from docx import Document
 import pandas as pd
 from dotenv import load_dotenv
 #import streamlit as st
@@ -51,6 +52,16 @@ def read_pdf(file):
     return text
 
 #%%
+
+# Function to read a DOC/DOCX file
+def read_docx(file):
+    doc = Document(file)
+    text = ''
+    for paragraph in doc.paragraphs:
+        text += paragraph.text + '\n'
+    return text
+
+#%%
 def process_resume(resume_text, job_description_text):
     # Create the agents
     job_requirements_agent = Agent(
@@ -74,22 +85,6 @@ def process_resume(resume_text, job_description_text):
             "background and capabilities."
         )
     )
-
-    resume_scorer_agent = Agent(
-        role="Resume Scorer",
-        goal="Score each resume based on how well it matches the job requirements.",
-        verbose=False,
-        allow_delegation=False,
-        backstory=(
-        "As a Resume Scorer, you evaluate each candidate's fit by comparing their "
-        "analyzed resume against the extracted job requirements. Always begin your "
-        "response with 'The score is x out of 10', replacing 'x' with the actual " 
-        "score. Then provide a concise justification for the score - not too long "
-        "or too short."
-        )
-    )
-
-
     # Create the new agents
     name_extractor_agent = Agent(
         role="Name Extractor",
@@ -104,6 +99,24 @@ def process_resume(resume_text, job_description_text):
         "task; do it yourself."
         )
     )
+
+    resume_scorer_agent = Agent(
+        role="Resume Scorer",
+        goal="Score each resume based on how well it matches the job requirements,"
+        "provide the name of the candidate, along with justification",
+        verbose=False,
+        allow_delegation=False,
+        backstory=(
+        "As a Resume Scorer, you evaluate each candidate's fit by comparing their "
+        "analyzed resume against the extracted job requirements. Always begin your "
+        "response with 'The score of the candidate x is y out of 10', replacing 'x' "
+        "with the name of the candidate, and 'y' with the actual score. "
+        "Then provide a concise justification for the score - not too long "
+        "or too short."
+        )
+    )
+
+
 
 
     #############################
@@ -131,21 +144,6 @@ def process_resume(resume_text, job_description_text):
         async_execution=True,
         inputs={'resume_text': resume_text}
     )
-
-    resume_scoring_task = Task(
-        description=(
-            "Compare the candidate's analyzed profile from resume_analysis_task with the job requirements "
-            "extracted from the job_requirements_task "
-            "and score the resume on a scale of 1 to 10, with 1 being a very weak candidate and 10 being a perfect fit. Provide a justification for the score."
-            "if you found out that the candidate is overqualified, it should affect your evaluation negatively and lower the score."
-        ),
-        expected_output=(
-        "The score is [1-10] out of 10. [Justification for the score.]"
-        ),
-        context=[job_requirements_task, resume_analysis_task],
-        agent=resume_scorer_agent
-    )
-
     # Define the tasks
     name_extraction_task = Task(
         description=(
@@ -158,6 +156,23 @@ def process_resume(resume_text, job_description_text):
         #async_execution=True,
         inputs={'resume_text': resume_text}
     )
+    
+    resume_scoring_task = Task(
+        description=(
+            "Compare the candidate's analyzed profile from resume_analysis_task with the job requirements "
+            "extracted from the job_requirements_task, for the candidate's name extracted from name_extraction_task "
+            "and score the resume on a scale of 1 to 10, with 1 being a very weak candidate and 10 being a perfect fit."
+            " Provide a justification for the score."
+            "if you found out that the candidate is overqualified, it should affect your evaluation negatively and lower the score."
+        ),
+        expected_output=(
+        "The score of the candidate [candidate's name] is [1-10] out of 10. [Justification for the score.]"
+        ),
+        context=[job_requirements_task, resume_analysis_task],
+        agent=resume_scorer_agent
+    )
+
+
     # Provide inputs
     crew_inputs = {'job_description_text': job_description_text, 'resume_text': resume_text}
 
@@ -169,64 +184,103 @@ def process_resume(resume_text, job_description_text):
     #llm = llm, verbose=True)
     # Run the crew
     result = talent_development_crew.kickoff(inputs=crew_inputs)
-    # Extract score and justification using regex
-
-    regex = re.compile(r'The score is (\d+) out of 10\.\s*(.*)')
-    match = regex.search(str(result))  # Convert result to string
-    #match = regex.searchs(result.raw)
-
+    # Extract name and score using regex
+    regex = re.compile(r"The score of the candidate (.+?) is (\d+) out of 10\.\s*(.*)")
+    #match = regex.search(result.raw)
+    match = regex.search(str(result))
+    
     if match:
-        score = int(match.group(1))
-        justification = match.group(2).strip()
+        name = match.group(1).strip()  # Extract the candidate's name
+        score = int(match.group(2))    # Extract the score
+        justification = match.group(3).strip()  # Extract the justification
     else:
+        name = None
         score = None
         justification = None
 
 
     # Extract name from name_extraction_task output
     #name = name_extraction_task.output.raw
-    name = str(name_extraction_task.output.raw)  # Convert output to string
+    #name = str(name_extraction_task.output.raw)  # Convert output to string
     return name, score, justification
 
 
 #%%
 
 def main():
+    # Page config
+    st.set_page_config(page_title="Resume evaluator", page_icon="🤖")
+    # Display logo - using relative path
+    try:
+        st.image("assets/images/gbk_logo.svg", width=150)
+    except Exception as e:
+        st.error(f"Error loading image: {str(e)}")
+        st.markdown("---")
+    
     st.title("Resume Scoring Application")
+    
     st.write("Upload resumes and provide a job description to score candidates based on their fit for the job.")
-
-    # Job Description Input
+        # Job Description Input
     st.header("Job Description")
-    job_description_text = st.text_area("Enter the job description here:", height=300)
+    
+
+    input_method = st.radio("How would you like to provide the job description?", ("Paste Text", "Upload File"))
+
+    if input_method == "Paste Text":
+        job_description_text = st.text_area("Enter the job description here:", height=300)
+    else:
+        uploaded_jd_file = st.file_uploader("Upload Job Description File (PDF, DOC/DOCX, or TXT)", type=["pdf", "doc", "docx", "txt"], key="job_description")
+        job_description_text = ""
+        if uploaded_jd_file:
+            if uploaded_jd_file.name.endswith(".pdf"):
+                job_description_text = read_pdf(uploaded_jd_file)
+            elif uploaded_jd_file.name.endswith((".doc", ".docx")):
+                job_description_text = read_docx(uploaded_jd_file)
+            elif uploaded_jd_file.name.endswith(".txt"):
+                job_description_text = uploaded_jd_file.read().decode("utf-8")
+            else:
+                st.error("Unsupported file type. Please upload a PDF, DOC/DOCX, or TXT file.")
 
     # Resume Upload
     st.header("Upload Resumes")
-    uploaded_files = st.file_uploader("Choose PDF files", accept_multiple_files=True, type=['pdf'])
+    uploaded_files = st.file_uploader("Choose Resume Files (PDF, DOC/DOCX)", accept_multiple_files=True, type=['pdf', 'doc', 'docx'], key="resumes")
+
+    if uploaded_files and len(uploaded_files) > 10:
+        st.error("You can upload a maximum of 10 resumes at a time.")
 
     if st.button("Process Resumes"):
-        if not job_description_text:
+        if not job_description_text.strip():
             st.error("Please provide a job description.")
         elif not uploaded_files:
             st.error("Please upload at least one resume.")
+        elif len(uploaded_files) > 10:
+            st.error("You can upload a maximum of 10 resumes.")
         else:
             results = []
 
             # Process each uploaded resume
             for uploaded_file in uploaded_files:
-                resume_text = read_pdf(uploaded_file)
+                if uploaded_file.name.endswith(".pdf"):
+                    resume_text = read_pdf(uploaded_file)
+                elif uploaded_file.name.endswith((".doc", ".docx")):
+                    resume_text = read_docx(uploaded_file)
+                else:
+                    st.error(f"Unsupported file type for {uploaded_file.name}. Skipping.")
+                    continue
+
                 # Process the resume
                 with st.spinner(f"Processing {uploaded_file.name}..."):
-                    name, score, justification = process_resume(resume_text, job_description_text)
+                    candidate_name, score, justification = process_resume(resume_text, job_description_text)
 
                 # Display the result
-                st.subheader(f"Results for ({uploaded_file.name})")
+                st.subheader(f"Results for {candidate_name} ({uploaded_file.name})")
                 st.write(f"**Score:** {score} out of 10")
                 st.write(f"**Justification:** {justification}")
 
                 # Append to results
                 results.append({
                     'filename': uploaded_file.name,
-                    'applicant_name': name,
+                    'applicant_name': candidate_name,
                     'score': score,
                     'justification': justification
                 })
@@ -247,5 +301,6 @@ def main():
                 mime='text/csv',
             )
 
+            
 if __name__ == "__main__":
     main()
