@@ -19,6 +19,7 @@ from openai import OpenAI
 #import pysqlite3
 #sys.modules['sqlite3'] = pysqlite3
 import streamlit as st
+st.set_page_config(page_title="Resume Evaluator", page_icon="🤖")
 import streamlit_authenticator as stauth
 import hmac
 
@@ -213,57 +214,39 @@ def process_resume(resume_text, job_description_text):
 def check_password():
     """Returns `True` if the user entered the correct username and password."""
 
-    def password_entered():
-        """Checks whether the entered username and password are correct."""
-        username = st.session_state.get("username", "")
-        password = st.session_state.get("password", "")
+    if "password_correct" not in st.session_state:
+        st.session_state["password_correct"] = False
 
-        # Validate username and password
-        if username in st.secrets["passwords"] and hmac.compare_digest(
-            password, st.secrets["passwords"][username]
-        ):
+    # Input fields for username and password
+    username = st.text_input("Username", key="username")
+    password = st.text_input("Password", type="password", key="password")
+
+    # Add a "Login" button
+    if st.button("Login"):
+        # Validate credentials using environment variables
+        if (username == "admin" and password == os.getenv("ADMIN_PASSWORD")) or \
+           (username == "user" and password == os.getenv("USER_PASSWORD")):
             st.session_state["password_correct"] = True
-            # Clear credentials from session state for security
-            del st.session_state["password"]
-            del st.session_state["username"]
+            st.session_state["authenticated_user"] = username  # Store authenticated username
         else:
+            st.error("Invalid username or password")
             st.session_state["password_correct"] = False
 
-    if "password_correct" not in st.session_state:
-        # First run: show inputs for username and password
-        st.text_input("Username", on_change=password_entered, key="username")
-        st.text_input("Password", type="password", on_change=password_entered, key="password")
-        return False
-    elif not st.session_state["password_correct"]:
-        # Invalid credentials
-        st.text_input("Username", on_change=password_entered, key="username")
-        st.text_input("Password", type="password", on_change=password_entered, key="password")
-        st.error("Invalid username or password")
-        return False
-    else:
-        # Credentials are valid
-        return True
+    return st.session_state["password_correct"]
+
+
 
 #%%
-
 def main():
     # Authenticate the user before accessing the app
     if not check_password():
         return  # Stop execution if password is incorrect
 
-    # Page config
-    st.set_page_config(page_title="Resume evaluator", page_icon="🤖")
-    
-    # Display logo - using relative path
-    try:
-        st.image("assets/images/gbk_logo.svg", width=150)
-    except Exception as e:
-        st.error(f"Error loading image: {str(e)}")
-        st.markdown("---")
-    
+    # Welcome message
+    username = st.session_state.get("authenticated_user", "Unknown User")
     st.title("Resume Scoring Application")
-    st.write("Upload resumes and provide a job description to score candidates based on their fit for the job.")
-    
+    st.write(f"Welcome, **{username}**! Upload resumes and provide a job description to score candidates.")
+
     # Job Description Input
     st.header("Job Description")
     input_method = st.radio("How would you like to provide the job description?", ("Paste Text", "Upload File"))
