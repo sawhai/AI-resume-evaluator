@@ -36,13 +36,20 @@ load_dotenv()
 api_key = os.getenv("API_KEY")
 os.environ["OPENAI_API_KEY"] = api_key  # Add this after getting api_key
 
+# Available models configuration
+AVAILABLE_MODELS = {
+    "GPT-4": "gpt-4o",
+    "GPT-4o-mini": "gpt-4o-mini",
+    "GPT-3.5 Turbo": "gpt-3.5-turbo"
+}
 
-# Initialize OpenAI client
-client = OpenAI(api_key=api_key)
-
-#llm = LLM(model="openai/gpt-4o")
-llm = ChatOpenAI(model="gpt-4o-mini", api_key=api_key)
-
+def initialize_ai_clients(model_name):
+    client = OpenAI(api_key=api_key)
+    if model_name in ["claude-3-opus", "claude-3-sonnet"]:
+        llm = ChatOpenAI(model=model_name, api_key=os.getenv("ANTHROPIC_API_KEY"))
+    else:
+        llm = ChatOpenAI(model=model_name, api_key=api_key)
+    return client, llm
 #%%
 
 # Reading PDF function
@@ -66,7 +73,9 @@ def read_docx(file):
     return text
 
 #%%
-def process_resume(resume_text, job_description_text):
+def process_resume(resume_text, job_description_text, llm):
+    # Initialize the LLM for the crew
+    crew_llm = llm
     # Create the agents
     job_requirements_agent = Agent(
         role="Job Requirements Extractor",
@@ -184,7 +193,7 @@ def process_resume(resume_text, job_description_text):
     talent_development_crew = Crew(
     agents=[job_requirements_agent, resume_analyzer_agent, resume_scorer_agent,name_extractor_agent],
     tasks=[job_requirements_task, resume_analysis_task, name_extraction_task, resume_scoring_task],
-    manager = llm, verbose = True)
+    manager = crew_llm, verbose = True)
     #llm = llm, verbose=True)
     # Run the crew
     result = talent_development_crew.kickoff(inputs=crew_inputs)
@@ -247,6 +256,16 @@ def main():
     st.title("Resume Scoring Application")
     st.write(f"Welcome, **{username}**! Upload resumes and provide a job description to score candidates.")
 
+    # Model selection
+    selected_model = st.selectbox(
+        "Select AI Model",
+        options=list(AVAILABLE_MODELS.keys()),
+        index=0
+    )
+    
+    # Initialize AI clients with selected model
+    client, llm = initialize_ai_clients(AVAILABLE_MODELS[selected_model])
+    
     # Job Description Input
     st.header("Job Description")
     input_method = st.radio("How would you like to provide the job description?", ("Paste Text", "Upload File"))
@@ -282,20 +301,12 @@ def main():
             st.error("You can upload a maximum of 10 resumes.")
         else:
             results = []
-
-            # Process each uploaded resume
             for uploaded_file in uploaded_files:
-                if uploaded_file.name.endswith(".pdf"):
-                    resume_text = read_pdf(uploaded_file)
-                elif uploaded_file.name.endswith((".doc", ".docx")):
-                    resume_text = read_docx(uploaded_file)
-                else:
-                    st.error(f"Unsupported file type for {uploaded_file.name}. Skipping.")
-                    continue
+                # Process resume with selected model
+                with st.spinner(f"Processing {uploaded_file.name} using {selected_model}..."):
+                    resume_text = read_pdf(uploaded_file) if uploaded_file.name.endswith(".pdf") else read_docx(uploaded_file)
+                    candidate_name, score, justification = process_resume(resume_text, job_description_text, llm)
 
-                # Process the resume
-                with st.spinner(f"Processing {uploaded_file.name}..."):
-                    candidate_name, score, justification = process_resume(resume_text, job_description_text)
 
                 # Display the result
                 st.subheader(f"Results for {candidate_name} ({uploaded_file.name})")
