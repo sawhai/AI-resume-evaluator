@@ -38,9 +38,7 @@ os.environ["OPENAI_API_KEY"] = api_key  # Add this after getting api_key
 
 # Available models configuration
 AVAILABLE_MODELS = {
-    "GPT-4": "gpt-4o",
-    "GPT-4o-mini": "gpt-4o-mini",
-    "GPT-3.5 Turbo": "gpt-3.5-turbo"
+    "GPT-4o-mini": "gpt-4o-mini"
 }
 
 def initialize_ai_clients(model_name):
