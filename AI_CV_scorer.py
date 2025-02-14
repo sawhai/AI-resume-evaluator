@@ -1,4 +1,3 @@
-
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
@@ -8,6 +7,7 @@ Created on Wed Jan 22 12:11:03 2025
 """
 #%%
 import os
+import json
 import PyPDF2
 from docx import Document
 import pandas as pd
@@ -36,9 +36,27 @@ load_dotenv()
 api_key = os.getenv("API_KEY")
 os.environ["OPENAI_API_KEY"] = api_key  # Add this after getting api_key
 
+# File for persisting CV counts across sessions
+PERSISTENCE_FILE = "cv_counts.json"
+MAX_CV_LIMIT = 30  # Maximum number of CVs allowed per user
+
+def load_cv_counts():
+    """Load CV counts from the persistence file."""
+    if os.path.exists(PERSISTENCE_FILE):
+        with open(PERSISTENCE_FILE, "r") as f:
+            return json.load(f)
+    return {}
+
+def save_cv_counts(counts):
+    """Save CV counts to the persistence file."""
+    with open(PERSISTENCE_FILE, "w") as f:
+        json.dump(counts, f)
+
 # Available models configuration
 AVAILABLE_MODELS = {
+    #"GPT-4": "gpt-4o",
     "GPT-4o-mini": "gpt-4o-mini"
+    #"GPT-3.5 Turbo": "gpt-3.5-turbo"
 }
 
 def initialize_ai_clients(model_name):
@@ -103,32 +121,29 @@ def process_resume(resume_text, job_description_text, llm):
         verbose=False,
         allow_delegation=False,
         backstory=(
-        "As a Resume Scorer, you evaluate each candidate's fit by comparing their "
-        "analyzed resume against the extracted job requirements. Always begin your "
-        "response with 'The score is x out of 10', replacing 'x' with the actual "
-        "score. Then provide a justification for the score. Do not delegate this "
-        "task; do it yourself."
+            "As a Resume Scorer, you evaluate each candidate's fit by comparing their "
+            "analyzed resume against the extracted job requirements. Always begin your "
+            "response with 'The score is x out of 10', replacing 'x' with the actual "
+            "score. Then provide a justification for the score. Do not delegate this "
+            "task; do it yourself."
         )
     )
 
     resume_scorer_agent = Agent(
         role="Resume Scorer",
         goal="Score each resume based on how well it matches the job requirements,"
-        "provide the name of the candidate, along with justification",
+             "provide the name of the candidate, along with justification",
         verbose=False,
         allow_delegation=False,
         backstory=(
-        "As a Resume Scorer, you evaluate each candidate's fit by comparing their "
-        "analyzed resume against the extracted job requirements. Always begin your "
-        "response with 'The score of the candidate x is y out of 10', replacing 'x' "
-        "with the name of the candidate, and 'y' with the actual score. "
-        "Then provide a concise justification for the score - not too long "
-        "or too short."
+            "As a Resume Scorer, you evaluate each candidate's fit by comparing their "
+            "analyzed resume against the extracted job requirements. Always begin your "
+            "response with 'The score of the candidate x is y out of 10', replacing 'x' "
+            "with the name of the candidate, and 'y' with the actual score. "
+            "Then provide a concise justification for the score - not too long "
+            "or too short."
         )
     )
-
-
-
 
     #############################
     # Define tasks
@@ -177,27 +192,24 @@ def process_resume(resume_text, job_description_text, llm):
             "if you found out that the candidate is overqualified, it should affect your evaluation negatively and lower the score."
         ),
         expected_output=(
-        "The score of the candidate [candidate's name] is [1-10] out of 10. [Justification for the score.]"
+            "The score of the candidate [candidate's name] is [1-10] out of 10. [Justification for the score.]"
         ),
         context=[job_requirements_task, resume_analysis_task],
         agent=resume_scorer_agent
     )
-
 
     # Provide inputs
     crew_inputs = {'job_description_text': job_description_text, 'resume_text': resume_text}
 
     # Create the crew
     talent_development_crew = Crew(
-    agents=[job_requirements_agent, resume_analyzer_agent, resume_scorer_agent,name_extractor_agent],
-    tasks=[job_requirements_task, resume_analysis_task, name_extraction_task, resume_scoring_task],
-    manager = crew_llm, verbose = True)
-    #llm = llm, verbose=True)
+        agents=[job_requirements_agent, resume_analyzer_agent, resume_scorer_agent, name_extractor_agent],
+        tasks=[job_requirements_task, resume_analysis_task, name_extraction_task, resume_scoring_task],
+        manager=crew_llm, verbose=True)
     # Run the crew
     result = talent_development_crew.kickoff(inputs=crew_inputs)
     # Extract name and score using regex
     regex = re.compile(r"The score of the candidate (.+?) is (\d+) out of 10\.\s*(.*)")
-    #match = regex.search(result.raw)
     match = regex.search(str(result))
     
     if match:
@@ -209,18 +221,11 @@ def process_resume(resume_text, job_description_text, llm):
         score = None
         justification = None
 
-
-    # Extract name from name_extraction_task output
-    #name = name_extraction_task.output.raw
-    #name = str(name_extraction_task.output.raw)  # Convert output to string
     return name, score, justification
-
-
 
 #%%
 def check_password():
     """Returns `True` if the user entered the correct username and password."""
-
     if "password_correct" not in st.session_state:
         st.session_state["password_correct"] = False
 
@@ -241,18 +246,23 @@ def check_password():
 
     return st.session_state["password_correct"]
 
-
-
 #%%
 def main():
     # Authenticate the user before accessing the app
     if not check_password():
         return  # Stop execution if password is incorrect
 
-    # Welcome message
+    # Retrieve the authenticated username
     username = st.session_state.get("authenticated_user", "Unknown User")
+    
+    # Load persistent CV counts for all users
+    cv_counts = load_cv_counts()
+    if username not in cv_counts:
+        cv_counts[username] = 0  # Initialize if user is new
+
     st.title("Resume Scoring Application")
-    st.write(f"Welcome, **{username}**! Upload resumes and provide a job description to score candidates.")
+    st.write(f"Welcome, **{username}**! You have processed **{cv_counts[username]}** CV(s) so far.")
+    st.write(f"You are allowed a total of {MAX_CV_LIMIT} CVs.")
 
     # Model selection
     selected_model = st.selectbox(
@@ -298,43 +308,54 @@ def main():
         elif len(uploaded_files) > 10:
             st.error("You can upload a maximum of 10 resumes.")
         else:
-            results = []
-            for uploaded_file in uploaded_files:
-                # Process resume with selected model
-                with st.spinner(f"Processing {uploaded_file.name} using {selected_model}..."):
-                    resume_text = read_pdf(uploaded_file) if uploaded_file.name.endswith(".pdf") else read_docx(uploaded_file)
-                    candidate_name, score, justification = process_resume(resume_text, job_description_text, llm)
+            # Check if processing these resumes would exceed the limit
+            if cv_counts[username] + len(uploaded_files) > MAX_CV_LIMIT:
+                st.error(f"Processing these resumes would exceed your limit of {MAX_CV_LIMIT} CVs. "
+                         f"You have already processed {cv_counts[username]} CV(s).")
+            else:
+                results = []
+                for uploaded_file in uploaded_files:
+                    # Process resume with selected model
+                    with st.spinner(f"Processing {uploaded_file.name} using {selected_model}..."):
+                        resume_text = read_pdf(uploaded_file) if uploaded_file.name.endswith(".pdf") else read_docx(uploaded_file)
+                        candidate_name, score, justification = process_resume(resume_text, job_description_text, llm)
 
+                    # Display the result
+                    st.subheader(f"Results for {candidate_name} ({uploaded_file.name})")
+                    st.write(f"**Score:** {score} out of 10")
+                    st.write(f"**Justification:** {justification}")
 
-                # Display the result
-                st.subheader(f"Results for {candidate_name} ({uploaded_file.name})")
-                st.write(f"**Score:** {score} out of 10")
-                st.write(f"**Justification:** {justification}")
+                    # Append to results
+                    results.append({
+                        'filename': uploaded_file.name,
+                        'applicant_name': candidate_name,
+                        'score': score,
+                        'justification': justification
+                    })
 
-                # Append to results
-                results.append({
-                    'filename': uploaded_file.name,
-                    'applicant_name': candidate_name,
-                    'score': score,
-                    'justification': justification
-                })
+                # Update the count for the current user
+                cv_counts[username] += len(uploaded_files)
+                # Save updated counts to persistence file
+                save_cv_counts(cv_counts)
 
-            # Create a DataFrame
-            df_results = pd.DataFrame(results)
+                # Create a DataFrame for summary
+                df_results = pd.DataFrame(results)
 
-            # Optionally, display the DataFrame
-            st.header("Summary")
-            st.dataframe(df_results)
+                st.header("Summary")
+                st.dataframe(df_results)
 
-            # Optionally, allow download of results
-            csv = df_results.to_csv(index=False)
-            st.download_button(
-                label="Download Results as CSV",
-                data=csv,
-                file_name='resume_scoring_results.csv',
-                mime='text/csv',
-            )
+                # Optionally, allow download of results
+                csv = df_results.to_csv(index=False)
+                st.download_button(
+                    label="Download Results as CSV",
+                    data=csv,
+                    file_name='resume_scoring_results.csv',
+                    mime='text/csv',
+                )
 
+                st.success(f"You have now processed a total of {cv_counts[username]} out of {MAX_CV_LIMIT} allowed CV(s).")
+                if cv_counts[username] >= MAX_CV_LIMIT:
+                    st.warning("You have reached your processing limit.")
 
 if __name__ == "__main__":
     main()
