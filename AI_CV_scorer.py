@@ -38,7 +38,7 @@ os.environ["OPENAI_API_KEY"] = api_key  # Add this after getting api_key
 
 # File for persisting CV counts across sessions
 PERSISTENCE_FILE = "cv_counts.json"
-MAX_CV_LIMIT = 30  # Maximum number of CVs allowed per user
+MAX_CV_LIMIT = 70  # Maximum number of CVs allowed per user
 
 def load_cv_counts():
     """Load CV counts from the persistence file."""
